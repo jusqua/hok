@@ -7,6 +7,42 @@
 
 namespace hok {
 
+namespace util {
+
+// TODO: find a better naming for those channel related operations
+
+/// Get a channel range stride
+template <int dims>
+inline sycl::range<dims> channels_stride(size_t channels) {
+    if constexpr (dims == 3) {
+        return sycl::range<dims>(1, 1, channels);
+    } if constexpr (dims == 2) {
+        return sycl::range<dims>(1, channels);
+    } else {
+        return sycl::range<dims>(channels);
+    }
+}
+
+/// Get a channel range offset
+template <int dims>
+inline sycl::range<dims> channels_offset(size_t offset) {
+    if constexpr (dims == 3) {
+        return sycl::range<dims>(0, 0, offset);
+    } if constexpr (dims == 2) {
+        return sycl::range<dims>(0, offset);
+    } else {
+        return sycl::range<dims>(offset);
+    }
+}
+
+/// Bake channel in the last dimension
+template <int dimensions>
+inline sycl::range<dimensions> channeled_range(sycl::range<dimensions> range, size_t channels) {
+    return range * channels_stride<dimensions>(channels);
+}
+
+} // namespace util
+
 namespace detail {
 
 template <typename T, typename = void>
@@ -167,6 +203,62 @@ private:
     value_type m_threshold;
     value_type m_max_value;
     value_type m_min_value;
+};
+
+template <
+    typename input_type,
+    typename output_type,
+    int dimensions = detail::element_dimensions<input_type>,
+    typename = std::enable_if_t<detail::is_numeric_v<input_type>>,
+    typename = std::enable_if_t<detail::is_numeric_v<output_type>>,
+    typename = std::enable_if_t<detail::is_same_v<input_type, output_type>>
+>
+class gray {
+public:
+    using value_type = detail::element_t<input_type>;
+
+    gray(input_type input_data, output_type output_data, std::size_t channels)
+        : m_input_data(input_data), m_output_data(output_data), m_channels(channels) {}
+
+    template <typename U = input_type, typename = std::enable_if_t<!detail::is_buffer<U>>>
+    void operator()(const sycl::id<dimensions> id) const {
+        auto cid = id * util::channels_stride<dimensions>(m_channels);
+        auto r = m_input_data[cid];
+        auto g = m_input_data[cid + util::channels_offset<dimensions>(1)];
+        auto b = m_input_data[cid + util::channels_offset<dimensions>(2)];
+
+        // BT.601 color space gray conversion
+        value_type gray;
+        if constexpr (std::is_integral_v<value_type>)
+            gray = (r * 9798 + g * 19235 + b * 3735 + 16384) >> 15;
+        else if constexpr (std::is_floating_point_v<value_type>)
+            gray = r * 0.299f + g * 0.587f + b * 0.114f;
+        else
+            static_assert(false, "value_type must be an integral or floating-point type");
+
+        // TODO: output data may have smaller channels than the input data
+        for (size_t i = 0; i < 3; i++)
+            m_output_data[cid + util::channels_offset<dimensions>(i)] = gray;
+    }
+
+    template <typename U = input_type, typename = std::enable_if_t<!detail::is_accessor<U>>>
+    sycl::event submit(const sycl::range<dimensions> range, sycl::queue& queue) {
+        if constexpr (detail::is_pointer<input_type>) {
+            return queue.parallel_for(range, (*this));
+        } else {
+            return queue.submit([=] (sycl::handler& handler) {
+                auto input_data = m_input_data.get_access(handler, sycl::read_only);
+                auto output_data = m_output_data.get_access(handler, sycl::write_only);
+
+                handler.parallel_for(range, hok::gray(input_data, output_data, m_channels));
+            });
+        }
+    }
+
+private:
+    input_type m_input_data;
+    output_type m_output_data;
+    std::size_t m_channels;
 };
 
 }  // namespace hok
