@@ -125,6 +125,8 @@ public:
         this->write(m_output_data, item, 1.0f - this->read(m_input_data, item));
     }
 
+
+
 private:
     const sycl::range<dimensions> m_data_extent;
     const float* m_input_data;
@@ -313,6 +315,44 @@ private:
     const float* m_input_data;
     const float* m_window_data;
     float* m_output_data;
+};
+
+template <int dimensions>
+class geodesic_erode : public kernel_impl<dimensions> {
+public:
+    geodesic_erode(
+        const sycl::range<dimensions>& data_extent, const float* marker_data, const float* mask_data, float* output_data,
+        const sycl::range<dimensions>& window_extent, const float* window_data)
+        : m_erode(data_extent, marker_data, output_data, window_extent, window_data),
+          m_max(data_extent, mask_data, output_data, output_data) {}
+
+    void operator()(const sycl::item<dimensions> item) const {
+        m_erode(item);
+        m_max(item);
+    }
+
+private:
+    erode<dimensions> m_erode;
+    max<dimensions> m_max;
+};
+
+template <int dimensions>
+class geodesic_dilate : public kernel_impl<dimensions> {
+public:
+    geodesic_dilate(
+        const sycl::range<dimensions>& data_extent, const float* marker_data, const float* mask_data, float* output_data,
+        const sycl::range<dimensions>& window_extent, const float* window_data)
+        : m_dilate(data_extent, marker_data, output_data, window_extent, window_data),
+          m_min(data_extent, mask_data, output_data, output_data) {}
+
+    void operator()(const sycl::item<dimensions> item) const {
+        m_dilate(item);
+        m_min(item);
+    }
+
+private:
+    dilate<dimensions> m_dilate;
+    min<dimensions> m_min;
 };
 
 }  // namespace hok
