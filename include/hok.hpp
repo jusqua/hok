@@ -11,7 +11,14 @@ template <int dimensions>
 class kernel_impl {
 public:
     /// Must be implemented by derived classes
-    void operator()(const sycl::item<dimensions> item) const;
+    void operator()(const sycl::item<dimensions> item) const {
+        static_assert(false, "Not allowed in serial kernels, use kernel.submit() instead");
+    }
+
+    /// Must be implemented by derived classes
+    sycl::event submit(sycl::range<dimensions> range, sycl::queue& q) const {
+        static_assert(false, "Not allowed in parallel kernels, use kernel() instead");
+    }
 
 protected:
     inline constexpr auto get_linear_id(const sycl::range<dimensions>& extent, const sycl::id<dimensions>& index) const {
@@ -353,6 +360,42 @@ public:
 private:
     dilate<dimensions> m_dilate;
     min<dimensions> m_min;
+};
+
+template <int dimensions>
+class open : public kernel_impl<dimensions> {
+public:
+    open(
+        const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
+        const sycl::range<dimensions>& window_extent, const float* window_data)
+        : m_erode(data_extent, input_data, buffer_data, window_extent, window_data),
+          m_dilate(data_extent, buffer_data, output_data, window_extent, window_data) {}
+
+    sycl::event submit(sycl::range<dimensions> range, sycl::queue& q) const {
+        return q.parallel_for(range, q.parallel_for(range, m_erode), m_dilate);
+    }
+
+private:
+    erode<dimensions> m_erode;
+    dilate<dimensions> m_dilate;
+};
+
+template <int dimensions>
+class close : public kernel_impl<dimensions> {
+public:
+    close(
+        const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
+        const sycl::range<dimensions>& window_extent, const float* window_data)
+        : m_dilate(data_extent, buffer_data, output_data, window_extent, window_data),
+          m_erode(data_extent, input_data, buffer_data, window_extent, window_data) {}
+
+    sycl::event submit(sycl::range<dimensions> range, sycl::queue& q) const {
+        return q.parallel_for(range, q.parallel_for(range, m_dilate), m_erode);
+    }
+
+private:
+    dilate<dimensions> m_dilate;
+    erode<dimensions> m_erode;
 };
 
 }  // namespace hok
