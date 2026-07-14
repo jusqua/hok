@@ -175,6 +175,57 @@ private:
 };
 
 template <int dimensions>
+class min : public kernel_impl<dimensions> {
+public:
+    min(const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data)
+        : m_data_extent(data_extent), m_input1_data(input1_data), m_input2_data(input2_data), m_output_data(output_data) {}
+
+    void operator()(const sycl::item<dimensions> item) const {
+        this->write(m_output_data, item, sycl::min(this->read(m_input1_data, item), this->read(m_input2_data, item)));
+    }
+
+private:
+    const sycl::range<dimensions> m_data_extent;
+    const float* m_input1_data;
+    const float* m_input2_data;
+    float* m_output_data;
+};
+
+template <int dimensions>
+class max : public kernel_impl<dimensions> {
+public:
+    max(const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data)
+        : m_data_extent(data_extent), m_input1_data(input1_data), m_input2_data(input2_data), m_output_data(output_data) {}
+
+    void operator()(const sycl::item<dimensions> item) const {
+        this->write(m_output_data, item, sycl::max(this->read(m_input1_data, item), this->read(m_input2_data, item)));
+    }
+
+private:
+    const sycl::range<dimensions> m_data_extent;
+    const float* m_input1_data;
+    const float* m_input2_data;
+    float* m_output_data;
+};
+
+template <int dimensions>
+class sum : public kernel_impl<dimensions> {
+public:
+    sum(const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data)
+        : m_data_extent(data_extent), m_input1_data(input1_data), m_input2_data(input2_data), m_output_data(output_data) {}
+
+    void operator()(const sycl::item<dimensions> item) const {
+        this->write(m_output_data, item, sycl::min(sycl::float4(1.0f), this->read(m_input1_data, item) + this->read(m_input2_data, item)));
+    }
+
+private:
+    const sycl::range<dimensions> m_data_extent;
+    const float* m_input1_data;
+    const float* m_input2_data;
+    float* m_output_data;
+};
+
+template <int dimensions>
 class convolve : public kernel_impl<dimensions> {
 public:
     convolve(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data)
