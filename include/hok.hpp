@@ -100,15 +100,15 @@ protected:
 };
 
 template <int dimensions>
-class kernel_with_filter : public kernel<dimensions> {
+class window_kernel : public kernel<dimensions> {
 public:
-    kernel_with_filter(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& filter_extent, const float* filter_data)
-        : kernel<dimensions>(data_extent, input_data, output_data), filter_data(filter_data), filter_extent(filter_extent), filter_halo(this->vec(filter_extent / 2)) {}
+    window_kernel(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data)
+        : kernel<dimensions>(data_extent, input_data, output_data), window_data(window_data), window_extent(window_extent), window_halo(this->vec(window_extent / 2)) {}
 
 protected:
-    const sycl::range<dimensions> filter_extent;
-    const sycl::vec<int, dimensions> filter_halo;
-    const float* filter_data;
+    const sycl::range<dimensions> window_extent;
+    const sycl::vec<int, dimensions> window_halo;
+    const float* window_data;
 
     template <typename F>
     inline constexpr auto map(const sycl::range<dimensions>& range, const F&& apply) const {
@@ -185,16 +185,16 @@ public:
 };
 
 template <int dimensions>
-class convolve : public detail::kernel_with_filter<dimensions> {
+class convolve : public detail::window_kernel<dimensions> {
 public:
-    convolve(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& filter_extent, const float* filter_data)
-        : detail::kernel_with_filter<dimensions>(data_extent, input_data, output_data, filter_extent, filter_data) {}
+    convolve(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data)
+        : detail::window_kernel<dimensions>(data_extent, input_data, output_data, window_extent, window_data) {}
 
     void operator()(const sycl::item<dimensions> item) const {
         auto result = sycl::float4{0};
-        this->map(this->filter_extent, [&](sycl::id<dimensions> fid) {
-            auto px = this->read(this->input_data, this->get_linear_id(item, this->vec(fid) - this->filter_halo));
-            auto value = this->filter_data[this->get_linear_id(this->filter_extent, fid)];
+        this->map(this->window_extent, [&](sycl::id<dimensions> fid) {
+            auto px = this->read(this->input_data, this->get_linear_id(item, this->vec(fid) - this->window_halo));
+            auto value = this->window_data[this->get_linear_id(this->window_extent, fid)];
             result += px * value;
         });
         this->write(this->output_data, item, result);
@@ -202,18 +202,18 @@ public:
 };
 
 template <int dimensions>
-class erode : public detail::kernel_with_filter<dimensions> {
+class erode : public detail::window_kernel<dimensions> {
 public:
-    erode(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& filter_extent, const float* filter_data)
-        : detail::kernel_with_filter<dimensions>(data_extent, input_data, output_data, filter_extent, filter_data) {}
+    erode(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data)
+        : detail::window_kernel<dimensions>(data_extent, input_data, output_data, window_extent, window_data) {}
 
     void operator()(const sycl::item<dimensions> item) const {
         auto result = sycl::float4(1.0f, 1.0f, 1.0f, 1.0f);
         auto result_sum = result.x() + result.y() + result.z();
 
-        this->map(this->filter_extent, [&](sycl::id<dimensions> fid) {
-            auto px = this->read(this->input_data, this->get_linear_id(item, this->vec(fid) - this->filter_halo));
-            auto value = this->filter_data[this->get_linear_id(this->filter_extent, fid)];
+        this->map(this->window_extent, [&](sycl::id<dimensions> fid) {
+            auto px = this->read(this->input_data, this->get_linear_id(item, this->vec(fid) - this->window_halo));
+            auto value = this->window_data[this->get_linear_id(this->window_extent, fid)];
             auto px_sum = px.x() + px.y() + px.z();
             if (value != 0.0f && result_sum > px_sum) {
                 result = px;
@@ -225,18 +225,18 @@ public:
 };
 
 template <int dimensions>
-class dilate : public detail::kernel_with_filter<dimensions> {
+class dilate : public detail::window_kernel<dimensions> {
 public:
-    dilate(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& filter_extent, const float* filter_data)
-        : detail::kernel_with_filter<dimensions>(data_extent, input_data, output_data, filter_extent, filter_data) {}
+    dilate(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data)
+        : detail::window_kernel<dimensions>(data_extent, input_data, output_data, window_extent, window_data) {}
 
     void operator()(const sycl::item<dimensions> item) const {
         auto result = sycl::float4(0.0f, 0.0f, 0.0f, 0.0f);
         auto result_sum = result.x() + result.y() + result.z();
 
-        this->map(this->filter_extent, [&](sycl::id<dimensions> fid) {
-            auto px = this->read(this->input_data, this->get_linear_id(item, this->vec(fid) - this->filter_halo));
-            auto value = this->filter_data[this->get_linear_id(this->filter_extent, fid)];
+        this->map(this->window_extent, [&](sycl::id<dimensions> fid) {
+            auto px = this->read(this->input_data, this->get_linear_id(item, this->vec(fid) - this->window_halo));
+            auto value = this->window_data[this->get_linear_id(this->window_extent, fid)];
             auto px_sum = px.x() + px.y() + px.z();
             if (value != 0.0f && result_sum < px_sum) {
                 result = px;
