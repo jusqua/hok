@@ -1,3 +1,5 @@
+/* hok - v0.0.0 - Public Domain - https://github.com/jusqua/hok */
+
 #ifndef HOK_HPP
 #define HOK_HPP
 
