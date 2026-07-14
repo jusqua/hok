@@ -201,6 +201,52 @@ public:
     }
 };
 
+template <int dimensions>
+class erode : public detail::kernel_with_filter<dimensions> {
+public:
+    erode(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& filter_extent, const float* filter_data)
+        : detail::kernel_with_filter<dimensions>(data_extent, input_data, output_data, filter_extent, filter_data) {}
+
+    void operator()(const sycl::item<dimensions> item) const {
+        auto result = sycl::float4(1.0f, 1.0f, 1.0f, 1.0f);
+        auto result_sum = result.x() + result.y() + result.z();
+
+        this->map(this->filter_extent, [&](sycl::id<dimensions> fid) {
+            auto px = this->read(this->input_data, this->get_linear_id(item, this->vec(fid) - this->filter_halo));
+            auto value = this->filter_data[this->get_linear_id(this->filter_extent, fid)];
+            auto px_sum = px.x() + px.y() + px.z();
+            if (value != 0.0f && result_sum > px_sum) {
+                result = px;
+                result_sum = px_sum;
+            }
+        });
+        this->write(this->output_data, item, result);
+    }
+};
+
+template <int dimensions>
+class dilate : public detail::kernel_with_filter<dimensions> {
+public:
+    dilate(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& filter_extent, const float* filter_data)
+        : detail::kernel_with_filter<dimensions>(data_extent, input_data, output_data, filter_extent, filter_data) {}
+
+    void operator()(const sycl::item<dimensions> item) const {
+        auto result = sycl::float4(0.0f, 0.0f, 0.0f, 0.0f);
+        auto result_sum = result.x() + result.y() + result.z();
+
+        this->map(this->filter_extent, [&](sycl::id<dimensions> fid) {
+            auto px = this->read(this->input_data, this->get_linear_id(item, this->vec(fid) - this->filter_halo));
+            auto value = this->filter_data[this->get_linear_id(this->filter_extent, fid)];
+            auto px_sum = px.x() + px.y() + px.z();
+            if (value != 0.0f && result_sum < px_sum) {
+                result = px;
+                result_sum = px_sum;
+            }
+        });
+        this->write(this->output_data, item, result);
+    }
+};
+
 }  // namespace hok
 
 #endif  // HOK_HPP
