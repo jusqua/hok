@@ -388,8 +388,8 @@ public:
     close(
         const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
         const sycl::range<dimensions>& window_extent, const float* window_data)
-        : m_dilate(data_extent, buffer_data, output_data, window_extent, window_data),
-          m_erode(data_extent, input_data, buffer_data, window_extent, window_data) {}
+        : m_dilate(data_extent, input_data, buffer_data, window_extent, window_data),
+          m_erode(data_extent, buffer_data, output_data, window_extent, window_data) {}
 
     sycl::event submit(sycl::range<dimensions> range, sycl::queue& q) const {
         return q.parallel_for(range, q.parallel_for(range, m_dilate), m_erode);
