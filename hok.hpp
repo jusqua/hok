@@ -186,6 +186,23 @@ private:
 };
 
 template <int dimensions>
+class binary : public kernel_impl<dimensions> {
+public:
+    binary(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float threshold, float max_value = 1.0f, float min_value = 0.0f)
+        : m_gray(data_extent, input_data, output_data),
+          m_thresh(data_extent, output_data, output_data, threshold, max_value, min_value) {}
+
+    void operator()(const sycl::item<dimensions> item) const {
+        m_gray(item);
+        m_thresh(item);
+    }
+
+private:
+    gray<dimensions> m_gray;
+    thresh<dimensions> m_thresh;
+};
+
+template <int dimensions>
 class min : public kernel_impl<dimensions> {
 public:
     min(const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data)
@@ -227,6 +244,23 @@ public:
 
     void operator()(const sycl::item<dimensions> item) const {
         this->write(m_output_data, item, sycl::min(sycl::float4(1.0f), this->read(m_input1_data, item) + this->read(m_input2_data, item)));
+    }
+
+private:
+    const sycl::range<dimensions> m_data_extent;
+    const float* m_input1_data;
+    const float* m_input2_data;
+    float* m_output_data;
+};
+
+template <int dimensions>
+class sub : public kernel_impl<dimensions> {
+public:
+    sub(const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data)
+        : m_data_extent(data_extent), m_input1_data(input1_data), m_input2_data(input2_data), m_output_data(output_data) {}
+
+    void operator()(const sycl::item<dimensions> item) const {
+        this->write(m_output_data, item, sycl::max(sycl::float4(0.0f), this->read(m_input1_data, item) + this->read(m_input2_data, item)));
     }
 
 private:
@@ -398,6 +432,24 @@ public:
 private:
     dilate<dimensions> m_dilate;
     erode<dimensions> m_erode;
+};
+
+template <int dimensions>
+class tophat : public kernel_impl<dimensions> {
+public:
+    tophat(
+        const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
+        const sycl::range<dimensions>& window_extent, const float* window_data)
+        : m_open(data_extent, input_data, buffer_data, output_data, window_extent, window_data),
+          m_sub(data_extent, input_data, buffer_data, output_data) {}
+
+    sycl::event submit(sycl::range<dimensions> range, sycl::queue& q) const {
+        return q.parallel_for(range, q.parallel_for(range, m_open), m_sub);
+    }
+
+private:
+    open<dimensions> m_open;
+    sub<dimensions> m_sub;
 };
 
 }  // namespace hok
