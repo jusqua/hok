@@ -1,7 +1,6 @@
 /* hok - v0.0.0 - Public Domain - https://github.com/jusqua/hok */
 
-#ifndef HOK_HPP
-#define HOK_HPP
+#pragma once
 
 #include <sycl/sycl.hpp>
 
@@ -454,7 +453,6 @@ private:
 
 }  // namespace hok
 
-#endif  // HOK_HPP
 /*
     ------------------------------------------------------------------------------
     This software is available under 2 licenses -- choose whichever you prefer.
