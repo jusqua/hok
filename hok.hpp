@@ -117,7 +117,7 @@ inline constexpr auto map(const sycl::range<dimensions>& range, const F&& apply)
 
 } // namespace hok::detail
 
-namespace hok {
+namespace hok::kernel {
 
 template <int dimensions>
 class invert {
@@ -392,59 +392,130 @@ private:
     min<dimensions> m_min;
 };
 
-template <int dimensions>
-class open {
-public:
-    open(
-        const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
-        const sycl::range<dimensions>& window_extent, const float* window_data)
-        : m_erode(data_extent, input_data, buffer_data, window_extent, window_data),
-          m_dilate(data_extent, buffer_data, output_data, window_extent, window_data) {}
+}  // namespace hok::kernel
 
-    sycl::event submit(sycl::range<dimensions> range, sycl::queue& q) const {
-        return q.parallel_for(range, q.parallel_for(range, m_erode), m_dilate);
-    }
-
-private:
-    erode<dimensions> m_erode;
-    dilate<dimensions> m_dilate;
-};
+namespace hok {
 
 template <int dimensions>
-class close {
-public:
-    close(
-        const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
-        const sycl::range<dimensions>& window_extent, const float* window_data)
-        : m_dilate(data_extent, input_data, buffer_data, window_extent, window_data),
-          m_erode(data_extent, buffer_data, output_data, window_extent, window_data) {}
-
-    sycl::event submit(sycl::range<dimensions> range, sycl::queue& q) const {
-        return q.parallel_for(range, q.parallel_for(range, m_dilate), m_erode);
-    }
-
-private:
-    dilate<dimensions> m_dilate;
-    erode<dimensions> m_erode;
-};
+inline sycl::event gray(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data) {
+    return queue.parallel_for(data_extent, kernel::gray(data_extent, input_data, output_data));
+}
 
 template <int dimensions>
-class tophat {
-public:
-    tophat(
-        const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
-        const sycl::range<dimensions>& window_extent, const float* window_data)
-        : m_open(data_extent, input_data, buffer_data, output_data, window_extent, window_data),
-          m_sub(data_extent, input_data, buffer_data, output_data) {}
+inline sycl::event thresh(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data,
+    float threshold, float max_value = 1.0f, float min_value = 0.0f) {
+    return queue.parallel_for(data_extent, kernel::thresh(data_extent, input_data, output_data, threshold, max_value, min_value));
+}
 
-    sycl::event submit(sycl::range<dimensions> range, sycl::queue& q) const {
-        return q.parallel_for(range, q.parallel_for(range, m_open), m_sub);
-    }
+template <int dimensions>
+inline sycl::event binary(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data,
+    float threshold, float max_value = 1.0f, float min_value = 0.0f) {
+    return queue.parallel_for(data_extent, kernel::binary(data_extent, input_data, output_data, threshold, max_value, min_value));
+}
 
-private:
-    open<dimensions> m_open;
-    sub<dimensions> m_sub;
-};
+template <int dimensions>
+inline sycl::event min(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data) {
+    return queue.parallel_for(data_extent, kernel::min(data_extent, input1_data, input2_data, output_data));
+}
+
+template <int dimensions>
+inline sycl::event max(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data) {
+    return queue.parallel_for(data_extent, kernel::max(data_extent, input1_data, input2_data, output_data));
+}
+
+template <int dimensions>
+inline sycl::event sum(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data) {
+    return queue.parallel_for(data_extent, kernel::sum(data_extent, input1_data, input2_data, output_data));
+}
+
+template <int dimensions>
+inline sycl::event sub(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data) {
+    return queue.parallel_for(data_extent, kernel::sub(data_extent, input1_data, input2_data, output_data));
+}
+
+template <int dimensions>
+inline sycl::event convolve(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data,
+    const sycl::range<dimensions>& window_extent, const float* window_data) {
+    return queue.parallel_for(data_extent, kernel::convolve(data_extent, input_data, output_data, window_extent, window_data));
+}
+
+template <int dimensions>
+inline sycl::event erode(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data,
+    const sycl::range<dimensions>& window_extent, const float* window_data) {
+    return queue.parallel_for(data_extent, kernel::erode(data_extent, input_data, output_data, window_extent, window_data));
+}
+
+template <int dimensions>
+inline sycl::event dilate(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data,
+    const sycl::range<dimensions>& window_extent, const float* window_data) {
+    return queue.parallel_for(data_extent, kernel::dilate(data_extent, input_data, output_data, window_extent, window_data));
+}
+
+template <int dimensions>
+inline sycl::event geodesic_erode(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* marker_data, const float* mask_data, float* output_data,
+    const sycl::range<dimensions>& window_extent, const float* window_data) {
+    return queue.parallel_for(data_extent, kernel::geodesic_erode(data_extent, marker_data, mask_data, output_data, window_extent, window_data));
+}
+
+template <int dimensions>
+inline sycl::event geodesic_dilate(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* marker_data, const float* mask_data, float* output_data,
+    const sycl::range<dimensions>& window_extent, const float* window_data) {
+    return queue.parallel_for(data_extent, kernel::geodesic_dilate(data_extent, marker_data, mask_data, output_data, window_extent, window_data));
+}
+
+template <int dimensions>
+inline sycl::event open(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
+    const sycl::range<dimensions>& window_extent, const float* window_data) {
+    return queue.parallel_for(data_extent,
+        kernel::erode(data_extent, input_data, buffer_data, window_extent, window_data),
+        kernel::dilate(data_extent, buffer_data, output_data, window_extent, window_data));
+}
+
+template <int dimensions>
+inline sycl::event close(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
+    const sycl::range<dimensions>& window_extent, const float* window_data) {
+    return queue.parallel_for(data_extent,
+        kernel::dilate(data_extent, input_data, buffer_data, window_extent, window_data),
+        kernel::erode(data_extent, buffer_data, output_data, window_extent, window_data));
+}
+
+template <int dimensions>
+inline sycl::event tophat(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
+    const sycl::range<dimensions>& window_extent, const float* window_data) {
+    return queue.parallel_for(data_extent,
+        open(queue, data_extent, input_data, buffer_data, output_data, window_extent, window_data),
+        kernel::sub(data_extent, input_data, buffer_data, output_data));
+}
 
 }  // namespace hok
 
