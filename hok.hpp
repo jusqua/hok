@@ -248,6 +248,25 @@ private:
 };
 
 template <int dimensions>
+class equal {
+public:
+    equal(const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, bool* value)
+        : m_data_extent(data_extent), m_input1_data(input1_data), m_input2_data(input2_data), m_value(value) {}
+
+    void operator()(const sycl::item<dimensions> item) const {
+        if (!*m_value) return;
+
+        *m_value = detail::read(m_input1_data, item) == detail::read(m_input2_data, item);
+    }
+
+private:
+    const sycl::range<dimensions> m_data_extent;
+    const float* m_input1_data;
+    const float* m_input2_data;
+    bool* m_value;
+};
+
+template <int dimensions>
 class sub {
 public:
     sub(const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data)
@@ -441,6 +460,13 @@ inline sycl::event sum(
 }
 
 template <int dimensions>
+inline sycl::event equal(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, bool* value) {
+    return queue.parallel_for(data_extent, kernel::equal(data_extent, input1_data, input2_data, value));
+}
+
+template <int dimensions>
 inline sycl::event sub(
     sycl::queue& queue,
     const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data) {
@@ -508,13 +534,23 @@ inline sycl::event close(
 }
 
 template <int dimensions>
-inline sycl::event tophat(
+inline sycl::event white_tophat(
     sycl::queue& queue,
     const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
     const sycl::range<dimensions>& window_extent, const float* window_data) {
     return queue.parallel_for(data_extent,
         open(queue, data_extent, input_data, buffer_data, output_data, window_extent, window_data),
         kernel::sub(data_extent, input_data, buffer_data, output_data));
+}
+
+template <int dimensions>
+inline sycl::event black_tophat(
+    sycl::queue& queue,
+    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
+    const sycl::range<dimensions>& window_extent, const float* window_data) {
+    return queue.parallel_for(data_extent,
+        close(queue, data_extent, input_data, buffer_data, output_data, window_extent, window_data),
+        kernel::sub(data_extent, buffer_data, input_data, output_data));
 }
 
 }  // namespace hok
