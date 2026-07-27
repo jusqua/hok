@@ -6,6 +6,8 @@
 
 namespace hok::detail {
 
+static constexpr auto s_channels = 4;
+
 template<int dimensions>
 inline constexpr auto get_linear_id(const sycl::range<dimensions>& extent, const sycl::id<dimensions>& index) {
     size_t id = 0;
@@ -49,8 +51,8 @@ inline constexpr auto get_linear_id(const sycl::item<dimensions>& item) {
 
 inline constexpr auto read(const float* data, size_t index) {
     auto value = sycl::float4{0.0f};
-    for(int i = 0; i < 4; ++i) {
-        value[i] = data[index * 4 + i];
+    for(int i = 0; i < s_channels; ++i) {
+        value[i] = data[index * s_channels + i];
     }
     return value;
 }
@@ -61,8 +63,8 @@ inline constexpr auto read(const float* data, const sycl::item<dimensions>& item
 }
 
 inline constexpr auto write(float* data, size_t index, const sycl::float4& value) {
-    for(int i = 0; i < 4; ++i) {
-        data[index * 4 + i] = value[i];
+    for(int i = 0; i < s_channels; ++i) {
+        data[index * s_channels + i] = value[i];
     }
 }
 
@@ -115,442 +117,217 @@ inline constexpr auto map(const sycl::range<dimensions>& range, const F&& apply)
     }
 }
 
+template<typename F>
+class unary_kernel_impl {
+public:
+    unary_kernel_impl(const float* in, float* out, F&& fn)
+        : m_in(in), m_out(out), m_fn(std::move(fn)) {}
+
+    template<int Dims>
+    void operator()(sycl::item<Dims> item) const {
+        auto px = detail::read(m_in, item);
+        detail::write(m_out, item, m_fn(px));
+    }
+
+private:
+    const float* m_in;
+    float* m_out;
+    F m_fn;
+};
+
+template<typename F>
+class binary_kernel_impl {
+public:
+    binary_kernel_impl(const float* in1, const float* in2, float* out, F&& fn)
+        : m_in1(in1), m_in2(in2), m_out(out), m_fn(std::move(fn)) {}
+
+    template<int Dims>
+    void operator()(sycl::item<Dims> item) const {
+        detail::write(m_out, item, m_fn(detail::read(m_in1, item), detail::read(m_in2, item)));
+    }
+
+private:
+    const float* m_in1;
+    const float* m_in2;
+    float* m_out;
+    F m_fn;
+};
+
+template <int Dims, typename F>
+class window_kernel_impl {
+public:
+    window_kernel_impl(const float* in, float* out, const sycl::range<Dims>& wextent, const float* wdata, const sycl::float4& init, F&& fn)
+        : m_wextent(wextent), m_in(in), m_out(out), m_wdata(wdata), m_init(init), m_whalo(detail::vec(wextent) / 2), m_fn(std::move(fn)) {}
+
+    void operator()(sycl::item<Dims> item) const {
+        auto result = m_init;
+        detail::map(m_wextent, [&](sycl::id<Dims> wid) {
+            auto px = detail::read(m_in, detail::get_linear_id(item, detail::vec(wid) - m_whalo));
+            auto value = m_wdata[detail::get_linear_id(m_wextent, wid)];
+            m_fn(result, px, value);
+        });
+        detail::write(m_out, item, result);
+    }
+
+private:
+    const float* m_in;
+    float* m_out;
+    F m_fn;
+
+    const sycl::range<Dims> m_wextent;
+    const sycl::vec<float, Dims> m_whalo;
+    const float* m_wdata;
+    const sycl::float4 m_init;
+};
+
 } // namespace hok::detail
-
-namespace hok::kernel {
-
-template <int dimensions>
-class invert {
-public:
-    invert(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data)
-        : m_data_extent(data_extent), m_input_data(input_data), m_output_data(output_data) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        detail::write(m_output_data, item, 1.0f - detail::read(m_input_data, item));
-    }
-
-private:
-    const sycl::range<dimensions> m_data_extent;
-    const float* m_input_data;
-    float* m_output_data;
-};
-
-template <int dimensions>
-class thresh {
-public:
-    thresh(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float threshold, float max_value = 1.0f, float min_value = 0.0f)
-        : m_data_extent(data_extent), m_input_data(input_data), m_output_data(output_data), m_threshold(threshold), m_max_value(max_value), m_min_value(min_value) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        auto px = detail::read(m_input_data, item);
-        px.x() = px.x() > m_threshold ? m_max_value : m_min_value;
-        px.y() = px.y() > m_threshold ? m_max_value : m_min_value;
-        px.z() = px.z() > m_threshold ? m_max_value : m_min_value;
-        detail::write(m_output_data, item, px);
-    }
-
-private:
-    const sycl::range<dimensions> m_data_extent;
-    const float* m_input_data;
-    float* m_output_data;
-    float m_threshold;
-    float m_max_value;
-    float m_min_value;
-};
-
-template <int dimensions>
-class gray {
-public:
-    gray(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data)
-        : m_data_extent(data_extent), m_input_data(input_data), m_output_data(output_data) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        auto px = detail::read(m_input_data, item);
-        float gray = px.x() * 0.299f + px.y() * 0.587f + px.z() * 0.114f;
-        px.x() = px.y() = px.z() = gray;
-
-        detail::write(m_output_data, item, px);
-    }
-
-private:
-    const sycl::range<dimensions> m_data_extent;
-    const float* m_input_data;
-    float* m_output_data;
-};
-
-template <int dimensions>
-class binary {
-public:
-    binary(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data,
-        float threshold, float max_value = 1.0f, float min_value = 0.0f)
-        : m_gray(data_extent, input_data, output_data),
-          m_thresh(data_extent, output_data, output_data, threshold, max_value, min_value) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        m_gray(item);
-        m_thresh(item);
-    }
-
-private:
-    gray<dimensions> m_gray;
-    thresh<dimensions> m_thresh;
-};
-
-template <int dimensions>
-class min {
-public:
-    min(const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data)
-        : m_data_extent(data_extent), m_input1_data(input1_data), m_input2_data(input2_data), m_output_data(output_data) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        detail::write(m_output_data, item, sycl::min(detail::read(m_input1_data, item), detail::read(m_input2_data, item)));
-    }
-
-private:
-    const sycl::range<dimensions> m_data_extent;
-    const float* m_input1_data;
-    const float* m_input2_data;
-    float* m_output_data;
-};
-
-template <int dimensions>
-class max {
-public:
-    max(const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data)
-        : m_data_extent(data_extent), m_input1_data(input1_data), m_input2_data(input2_data), m_output_data(output_data) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        detail::write(m_output_data, item, sycl::max(detail::read(m_input1_data, item), detail::read(m_input2_data, item)));
-    }
-
-private:
-    const sycl::range<dimensions> m_data_extent;
-    const float* m_input1_data;
-    const float* m_input2_data;
-    float* m_output_data;
-};
-
-template <int dimensions>
-class sum {
-public:
-    sum(const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data)
-        : m_data_extent(data_extent), m_input1_data(input1_data), m_input2_data(input2_data), m_output_data(output_data) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        detail::write(m_output_data, item, sycl::min(sycl::float4(1.0f), detail::read(m_input1_data, item) + detail::read(m_input2_data, item)));
-    }
-
-private:
-    const sycl::range<dimensions> m_data_extent;
-    const float* m_input1_data;
-    const float* m_input2_data;
-    float* m_output_data;
-};
-
-template <int dimensions>
-class equal {
-public:
-    equal(const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, bool* value)
-        : m_data_extent(data_extent), m_input1_data(input1_data), m_input2_data(input2_data), m_value(value) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        if (!*m_value) return;
-
-        *m_value = detail::read(m_input1_data, item) == detail::read(m_input2_data, item);
-    }
-
-private:
-    const sycl::range<dimensions> m_data_extent;
-    const float* m_input1_data;
-    const float* m_input2_data;
-    bool* m_value;
-};
-
-template <int dimensions>
-class sub {
-public:
-    sub(const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data)
-        : m_data_extent(data_extent), m_input1_data(input1_data), m_input2_data(input2_data), m_output_data(output_data) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        detail::write(m_output_data, item, sycl::max(sycl::float4(0.0f), detail::read(m_input1_data, item) + detail::read(m_input2_data, item)));
-    }
-
-private:
-    const sycl::range<dimensions> m_data_extent;
-    const float* m_input1_data;
-    const float* m_input2_data;
-    float* m_output_data;
-};
-
-template <int dimensions>
-class convolve {
-public:
-    convolve(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data)
-        : m_data_extent(data_extent), m_input_data(input_data), m_output_data(output_data),
-          m_window_extent(window_extent), m_window_halo(detail::vec(window_extent) / 2), m_window_data(window_data) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        auto result = sycl::float4{0};
-        detail::map(m_window_extent, [&](sycl::id<dimensions> fid) {
-            auto px = detail::read(m_input_data, detail::get_linear_id(item, detail::vec(fid) - m_window_halo));
-            auto value = m_window_data[detail::get_linear_id(m_window_extent, fid)];
-            result += px * value;
-        });
-        detail::write(m_output_data, item, result);
-    }
-
-private:
-    const sycl::range<dimensions> m_data_extent;
-    const sycl::range<dimensions> m_window_extent;
-    const sycl::vec<int, dimensions> m_window_halo;
-    const float* m_input_data;
-    const float* m_window_data;
-    float* m_output_data;
-};
-
-template <int dimensions>
-class erode {
-public:
-    erode(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data)
-        : m_data_extent(data_extent), m_input_data(input_data), m_output_data(output_data),
-          m_window_extent(window_extent), m_window_halo(detail::vec(window_extent) / 2), m_window_data(window_data) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        auto result = sycl::float4(1.0f, 1.0f, 1.0f, 1.0f);
-        auto result_sum = result.x() + result.y() + result.z();
-
-        detail::map(m_window_extent, [&](sycl::id<dimensions> fid) {
-            auto px = detail::read(m_input_data, detail::get_linear_id(item, detail::vec(fid) - m_window_halo));
-            auto value = m_window_data[detail::get_linear_id(m_window_extent, fid)];
-            auto px_sum = px.x() + px.y() + px.z();
-            if (value != 0.0f && result_sum > px_sum) {
-                result = px;
-                result_sum = px_sum;
-            }
-        });
-        detail::write(m_output_data, item, result);
-    }
-
-private:
-    const sycl::range<dimensions> m_data_extent;
-    const sycl::range<dimensions> m_window_extent;
-    const sycl::vec<int, dimensions> m_window_halo;
-    const float* m_input_data;
-    const float* m_window_data;
-    float* m_output_data;
-};
-
-template <int dimensions>
-class dilate {
-public:
-    dilate(const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data)
-        : m_data_extent(data_extent), m_input_data(input_data), m_output_data(output_data),
-          m_window_extent(window_extent), m_window_halo(detail::vec(window_extent) / 2), m_window_data(window_data) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        auto result = sycl::float4(0.0f, 0.0f, 0.0f, 0.0f);
-        auto result_sum = result.x() + result.y() + result.z();
-
-        detail::map(m_window_extent, [&](sycl::id<dimensions> fid) {
-            auto px = detail::read(m_input_data, detail::get_linear_id(item, detail::vec(fid) - m_window_halo));
-            auto value = m_window_data[detail::get_linear_id(m_window_extent, fid)];
-            auto px_sum = px.x() + px.y() + px.z();
-            if (value != 0.0f && result_sum < px_sum) {
-                result = px;
-                result_sum = px_sum;
-            }
-        });
-        detail::write(m_output_data, item, result);
-    }
-
-private:
-    const sycl::range<dimensions> m_data_extent;
-    const sycl::range<dimensions> m_window_extent;
-    const sycl::vec<int, dimensions> m_window_halo;
-    const float* m_input_data;
-    const float* m_window_data;
-    float* m_output_data;
-};
-
-template <int dimensions>
-class geodesic_erode {
-public:
-    geodesic_erode(
-        const sycl::range<dimensions>& data_extent, const float* marker_data, const float* mask_data, float* output_data,
-        const sycl::range<dimensions>& window_extent, const float* window_data)
-        : m_erode(data_extent, marker_data, output_data, window_extent, window_data),
-          m_max(data_extent, mask_data, output_data, output_data) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        m_erode(item);
-        m_max(item);
-    }
-
-private:
-    erode<dimensions> m_erode;
-    max<dimensions> m_max;
-};
-
-template <int dimensions>
-class geodesic_dilate {
-public:
-    geodesic_dilate(
-        const sycl::range<dimensions>& data_extent, const float* marker_data, const float* mask_data, float* output_data,
-        const sycl::range<dimensions>& window_extent, const float* window_data)
-        : m_dilate(data_extent, marker_data, output_data, window_extent, window_data),
-          m_min(data_extent, mask_data, output_data, output_data) {}
-
-    void operator()(const sycl::item<dimensions> item) const {
-        m_dilate(item);
-        m_min(item);
-    }
-
-private:
-    dilate<dimensions> m_dilate;
-    min<dimensions> m_min;
-};
-
-}  // namespace hok::kernel
 
 namespace hok {
 
-template <int dimensions>
-inline sycl::event gray(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data) {
-    return queue.parallel_for(data_extent, kernel::gray(data_extent, input_data, output_data));
+inline auto gray(const float* input_data, float* output_data) {
+    return detail::unary_kernel_impl(input_data, output_data, [](sycl::float4& px) {
+        float gray = px.x() * 0.299f + px.y() * 0.587f + px.z() * 0.114f;
+        px.x() = px.y() = px.z() = gray;
+        return px;
+    });
 }
 
-template <int dimensions>
-inline sycl::event thresh(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data,
-    float threshold, float max_value = 1.0f, float min_value = 0.0f) {
-    return queue.parallel_for(data_extent, kernel::thresh(data_extent, input_data, output_data, threshold, max_value, min_value));
+template<int dimensions>
+[[nodiscard]] inline auto gray(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input_data, float* output_data, const std::vector<sycl::event>& events = {}) {
+    return queue.parallel_for(io_extent, events, gray(input_data, output_data));
 }
 
-template <int dimensions>
-inline sycl::event binary(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data,
-    float threshold, float max_value = 1.0f, float min_value = 0.0f) {
-    return queue.parallel_for(data_extent, kernel::binary(data_extent, input_data, output_data, threshold, max_value, min_value));
+inline auto thresh(const float* input_data, float* output_data, float threshold) {
+    return detail::unary_kernel_impl(input_data, output_data, [threshold](sycl::float4& px) {
+        px.x() = px.x() > threshold ? 1.0f : 0.0f;
+        px.y() = px.y() > threshold ? 1.0f : 0.0f;
+        px.z() = px.z() > threshold ? 1.0f : 0.0f;
+        return px;
+    });
 }
 
-template <int dimensions>
-inline sycl::event min(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data) {
-    return queue.parallel_for(data_extent, kernel::min(data_extent, input1_data, input2_data, output_data));
+template<int dimensions>
+[[nodiscard]] inline auto thresh(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input_data, float* output_data, float threshold, const std::vector<sycl::event>& events = {}) {
+    return queue.parallel_for(io_extent, events, thresh(input_data, output_data, threshold));
 }
 
-template <int dimensions>
-inline sycl::event max(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data) {
-    return queue.parallel_for(data_extent, kernel::max(data_extent, input1_data, input2_data, output_data));
+inline auto min(const float* input1_data, const float* input2_data, float* output_data) {
+    return detail::binary_kernel_impl(input1_data, input2_data, output_data, [](sycl::float4& px, sycl::float4& px2) {
+        return sycl::min(px, px2);
+    });
 }
 
-template <int dimensions>
-inline sycl::event sum(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data) {
-    return queue.parallel_for(data_extent, kernel::sum(data_extent, input1_data, input2_data, output_data));
+template<int dimensions>
+[[nodiscard]] inline auto min(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input1_data, const float* input2_data, float* output_data, const std::vector<sycl::event>& events = {}) {
+    return queue.parallel_for(io_extent, events, min(input1_data, input2_data, output_data));
 }
 
-template <int dimensions>
-inline sycl::event equal(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, bool* value) {
-    return queue.parallel_for(data_extent, kernel::equal(data_extent, input1_data, input2_data, value));
+inline auto max(const float* input1_data, const float* input2_data, float* output_data) {
+    return detail::binary_kernel_impl(input1_data, input2_data, output_data, [](sycl::float4& px, sycl::float4& px2) {
+        return sycl::max(px, px2);
+    });
 }
 
-template <int dimensions>
-inline sycl::event sub(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input1_data, const float* input2_data, float* output_data) {
-    return queue.parallel_for(data_extent, kernel::sub(data_extent, input1_data, input2_data, output_data));
+template<int dimensions>
+[[nodiscard]] inline auto max(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input1_data, const float* input2_data, float* output_data, const std::vector<sycl::event>& events = {}) {
+    return queue.parallel_for(io_extent, events, max(input1_data, input2_data, output_data));
 }
 
-template <int dimensions>
-inline sycl::event convolve(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data,
-    const sycl::range<dimensions>& window_extent, const float* window_data) {
-    return queue.parallel_for(data_extent, kernel::convolve(data_extent, input_data, output_data, window_extent, window_data));
+inline auto sum(const float* input1_data, const float* input2_data, float* output_data) {
+    return detail::binary_kernel_impl(input1_data, input2_data, output_data, [](sycl::float4& px, sycl::float4& px2) {
+        return sycl::min(px + px2, sycl::float4(1.0f));
+    });
 }
 
-template <int dimensions>
-inline sycl::event erode(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data,
-    const sycl::range<dimensions>& window_extent, const float* window_data) {
-    return queue.parallel_for(data_extent, kernel::erode(data_extent, input_data, output_data, window_extent, window_data));
+template<int dimensions>
+[[nodiscard]] inline auto sum(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input1_data, const float* input2_data, float* output_data, const std::vector<sycl::event>& events = {}) {
+    return queue.parallel_for(io_extent, events, sum(input1_data, input2_data, output_data));
 }
 
-template <int dimensions>
-inline sycl::event dilate(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data,
-    const sycl::range<dimensions>& window_extent, const float* window_data) {
-    return queue.parallel_for(data_extent, kernel::dilate(data_extent, input_data, output_data, window_extent, window_data));
+inline auto sub(const float* input1_data, const float* input2_data, float* output_data) {
+    return detail::binary_kernel_impl(input1_data, input2_data, output_data, [](sycl::float4& px, sycl::float4& px2) {
+        return sycl::max(px - px2, sycl::float4(0.0f));
+    });
 }
 
-template <int dimensions>
-inline sycl::event geodesic_erode(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* marker_data, const float* mask_data, float* output_data,
-    const sycl::range<dimensions>& window_extent, const float* window_data) {
-    return queue.parallel_for(data_extent, kernel::geodesic_erode(data_extent, marker_data, mask_data, output_data, window_extent, window_data));
+template<int dimensions>
+[[nodiscard]] inline auto sub(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input1_data, const float* input2_data, float* output_data, const std::vector<sycl::event>& events = {}) {
+    return queue.parallel_for(io_extent, events, sub(input1_data, input2_data, output_data));
 }
 
-template <int dimensions>
-inline sycl::event geodesic_dilate(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* marker_data, const float* mask_data, float* output_data,
-    const sycl::range<dimensions>& window_extent, const float* window_data) {
-    return queue.parallel_for(data_extent, kernel::geodesic_dilate(data_extent, marker_data, mask_data, output_data, window_extent, window_data));
+template<int dimensions>
+inline auto convolve(const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data) {
+    return detail::window_kernel_impl(input_data, output_data, window_extent, window_data, sycl::float4(0), [](sycl::float4& acc, sycl::float4& px, float val) {
+        acc += px * val;
+    });
 }
 
-template <int dimensions>
-inline sycl::event open(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
-    const sycl::range<dimensions>& window_extent, const float* window_data) {
-    return queue.parallel_for(data_extent,
-        kernel::erode(data_extent, input_data, buffer_data, window_extent, window_data),
-        kernel::dilate(data_extent, buffer_data, output_data, window_extent, window_data));
+template<int dimensions>
+[[nodiscard]] inline auto convolve(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data, const std::vector<sycl::event>& events = {}) {
+    return queue.parallel_for(io_extent, events, convolve(input_data, output_data, window_extent, window_data));
 }
 
-template <int dimensions>
-inline sycl::event close(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
-    const sycl::range<dimensions>& window_extent, const float* window_data) {
-    return queue.parallel_for(data_extent,
-        kernel::dilate(data_extent, input_data, buffer_data, window_extent, window_data),
-        kernel::erode(data_extent, buffer_data, output_data, window_extent, window_data));
+template<int dimensions>
+inline auto erode(const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data) {
+    return detail::window_kernel_impl(input_data, output_data, window_extent, window_data, sycl::float4(1), [](sycl::float4& acc, sycl::float4& px, float val) {
+        if (val != 0.0f && acc[0] + acc[1] + acc[2] > px[0] + px[1] + px[2]) {
+            acc = px;
+        }
+    });
 }
 
-template <int dimensions>
-inline sycl::event white_tophat(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
-    const sycl::range<dimensions>& window_extent, const float* window_data) {
-    return queue.parallel_for(data_extent,
-        open(queue, data_extent, input_data, buffer_data, output_data, window_extent, window_data),
-        kernel::sub(data_extent, input_data, buffer_data, output_data));
+template<int dimensions>
+[[nodiscard]] inline auto erode(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data, const std::vector<sycl::event>& events = {}) {
+    return queue.parallel_for(io_extent, events, erode(input_data, output_data, window_extent, window_data));
 }
 
-template <int dimensions>
-inline sycl::event black_tophat(
-    sycl::queue& queue,
-    const sycl::range<dimensions>& data_extent, const float* input_data, float* output_data, float* buffer_data,
-    const sycl::range<dimensions>& window_extent, const float* window_data) {
-    return queue.parallel_for(data_extent,
-        close(queue, data_extent, input_data, buffer_data, output_data, window_extent, window_data),
-        kernel::sub(data_extent, buffer_data, input_data, output_data));
+template<int dimensions>
+inline auto dilate(const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data) {
+    return detail::window_kernel_impl(input_data, output_data, window_extent, window_data, sycl::float4(0), [](sycl::float4& acc, sycl::float4& px, float val) {
+        if (val != 0.0f && px[0] + px[1] + px[2] > acc[0] + acc[1] + acc[2]) {
+            acc = px;
+        }
+    });
+}
+
+template<int dimensions>
+[[nodiscard]] inline auto dilate(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data, const std::vector<sycl::event>& events = {}) {
+    return queue.parallel_for(io_extent, events, dilate(input_data, output_data, window_extent, window_data));
+}
+
+template<int dimensions>
+[[nodiscard]] inline auto binary(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input_data, float* output_data, float threshold, const std::vector<sycl::event>& events = {}) {
+    return thresh(queue, io_extent, output_data, output_data, threshold, { gray(queue, io_extent, input_data, output_data, events) });
+}
+
+template<int dimensions>
+[[nodiscard]] inline auto geodesic_erode(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input_data, const float* mask_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data, const std::vector<sycl::event>& events = {}) {
+    return max(queue, io_extent, mask_data, output_data, output_data, { erode(queue, io_extent, input_data, output_data, window_extent, window_data, events) });
+}
+
+template<int dimensions>
+[[nodiscard]] inline auto geodesic_dilate(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input_data, const float* mask_data, float* output_data, const sycl::range<dimensions>& window_extent, const float* window_data, const std::vector<sycl::event>& events = {}) {
+    return min(queue, io_extent, mask_data, output_data, output_data, { dilate(queue, io_extent, input_data, output_data, window_extent, window_data, events) });
+}
+
+template<int dimensions>
+[[nodiscard]] inline auto open(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input_data, float* output_data, float* buffer_data, const sycl::range<dimensions>& window_extent, const float* window_data, const std::vector<sycl::event>& events = {}) {
+    return dilate(queue, io_extent, buffer_data, output_data, window_extent, window_data, { erode(queue, io_extent, input_data, buffer_data, window_extent, window_data, events) });
+}
+
+template<int dimensions>
+[[nodiscard]] inline auto close(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input_data, float* output_data, float* buffer_data, const sycl::range<dimensions>& window_extent, const float* window_data, const std::vector<sycl::event>& events = {}) {
+    return erode(queue, io_extent, buffer_data, output_data, window_extent, window_data, { dilate(queue, io_extent, input_data, buffer_data, window_extent, window_data, events) });
+}
+
+template<int dimensions>
+[[nodiscard]] inline auto white_tophat(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input_data, float* output_data, float* buffer_data, const sycl::range<dimensions>& window_extent, const float* window_data, const std::vector<sycl::event>& events = {}) {
+    return sub(queue, io_extent, input_data, buffer_data, output_data, { open(queue, io_extent, input_data, buffer_data, output_data, window_extent, window_data, events) });
+}
+
+template<int dimensions>
+[[nodiscard]] inline auto black_tophat(sycl::queue& queue, const sycl::range<dimensions>& io_extent, const float* input_data, float* output_data, float* buffer_data, const sycl::range<dimensions>& window_extent, const float* window_data, const std::vector<sycl::event>& events = {}) {
+    return sub(queue, io_extent, buffer_data, input_data, output_data, { close(queue, io_extent, input_data, buffer_data, output_data, window_extent, window_data, events) });
 }
 
 }  // namespace hok
