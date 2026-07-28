@@ -24,21 +24,20 @@ inline constexpr auto get_linear_id(const sycl::range<dimensions>& extent, const
 }
 
 template<int dimensions>
-inline constexpr auto get_linear_id(const sycl::item<dimensions>& item, const sycl::vec<int, dimensions>& displacement) {
+inline constexpr auto get_linear_id(const sycl::item<dimensions>& item, const sycl::id<dimensions>& relative_index, const sycl::range<dimensions>& alignment) {
+    static_assert(dimensions > 0 && dimensions < 4, "ND not implemented yet");
+
     sycl::id<dimensions> index = item.get_id();
     sycl::range<dimensions> extent = item.get_range();
 
-    if constexpr (dimensions > 3) {
-        static_assert(false, "ND not implemented yet");
-    }
     if constexpr (dimensions > 0) {
-        index[0] = sycl::clamp(static_cast<int>(index[0]) + displacement[0], 0, static_cast<int>(extent[0]) - 1);
+        index[0] = sycl::clamp(static_cast<int>(index[0]) + static_cast<int>(relative_index[0]) - static_cast<int>(alignment[0]), 0, static_cast<int>(extent[0]) - 1);
     }
     if constexpr (dimensions > 1) {
-        index[1] = sycl::clamp(static_cast<int>(index[1]) + displacement[1], 0, static_cast<int>(extent[1]) - 1);
+        index[1] = sycl::clamp(static_cast<int>(index[1]) + static_cast<int>(relative_index[1]) - static_cast<int>(alignment[1]), 0, static_cast<int>(extent[1]) - 1);
     }
     if constexpr (dimensions > 2) {
-        index[2] = sycl::clamp(static_cast<int>(index[2]) + displacement[2], 0, static_cast<int>(extent[2]) - 1);
+        index[2] = sycl::clamp(static_cast<int>(index[2]) + static_cast<int>(relative_index[2]) - static_cast<int>(alignment[2]), 0, static_cast<int>(extent[2]) - 1);
     }
 
     return get_linear_id(extent, index);
@@ -71,25 +70,6 @@ inline constexpr auto write(float* data, size_t index, const sycl::float4& value
 template<int dimensions>
 inline constexpr auto write(float* data, const sycl::item<dimensions>& item, const sycl::float4& value) {
     write(data, item.get_linear_id(), value);
-}
-
-template<typename DataT, int dimensions>
-inline constexpr auto vec(const DataT& value) {
-    auto result = sycl::vec<int, dimensions>(0);
-
-    if constexpr (dimensions > 3) {
-        static_assert(false, "ND not implemented yet");
-    }
-    if constexpr (dimensions > 0) {
-        result[0] = value[0];
-    }
-    if constexpr (dimensions > 1) {
-        result[1] = value[1];
-    }
-    if constexpr (dimensions > 2) {
-        result[2] = value[2];
-    }
-    return result;
 }
 
 template <typename F, int dimensions>
@@ -153,16 +133,16 @@ private:
     F m_fn;
 };
 
-template <int Dims, typename F>
+template <int dimensions, typename F>
 class window_kernel_impl {
 public:
-    window_kernel_impl(const float* in, float* out, const sycl::range<Dims>& wextent, const float* wdata, const sycl::float4& init, F&& fn)
-        : m_wextent(wextent), m_in(in), m_out(out), m_wdata(wdata), m_init(init), m_whalo(detail::vec(wextent) / 2), m_fn(std::move(fn)) {}
+    window_kernel_impl(const float* in, float* out, const sycl::range<dimensions>& wextent, const float* wdata, const sycl::float4& init, F&& fn)
+        : m_wextent(wextent), m_in(in), m_out(out), m_wdata(wdata), m_init(init), m_whalo(wextent / 2), m_fn(std::move(fn)) {}
 
-    void operator()(sycl::item<Dims> item) const {
+    void operator()(sycl::item<dimensions> item) const {
         auto result = m_init;
-        detail::map(m_wextent, [&](sycl::id<Dims> wid) {
-            auto px = detail::read(m_in, detail::get_linear_id(item, detail::vec(wid) - m_whalo));
+        detail::map(m_wextent, [&](sycl::id<dimensions> wid) {
+            auto px = detail::read(m_in, detail::get_linear_id(item, wid, m_whalo));
             auto value = m_wdata[detail::get_linear_id(m_wextent, wid)];
             m_fn(result, px, value);
         });
@@ -174,8 +154,8 @@ private:
     float* m_out;
     F m_fn;
 
-    const sycl::range<Dims> m_wextent;
-    const sycl::vec<float, Dims> m_whalo;
+    const sycl::range<dimensions> m_wextent;
+    const sycl::range<dimensions> m_whalo;
     const float* m_wdata;
     const sycl::float4 m_init;
 };
