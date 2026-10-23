@@ -26,7 +26,7 @@ constexpr auto pow_v() {
     return pow<base, exp>::value;
 }
 
-static constexpr auto s_pi = 3.14159265358979323846;
+static constexpr auto s_pi = 3.14159265358979323846f;
 static constexpr auto s_channels = 4;
 
 template<int dimensions>
@@ -124,7 +124,7 @@ inline auto sqr_abs_diff(const sycl::float4& px1, const sycl::float4& px2) {
 
 template<int dimensions>
 inline auto sum_sqr(const sycl::id<dimensions>& id, const sycl::range<dimensions>& halo) {
-    auto result = 0.0;
+    auto result = 0.0f;
     for (auto i = 0; i < dimensions; i++) {
         auto diff = static_cast<int>(id[i]) - static_cast<int>(halo[i]);
         result += diff * diff;
@@ -415,13 +415,13 @@ inline auto mul(const T* input1, const T* input2, T* output) {
 }
 
 template<int dimensions, typename T>
-inline auto gaussian(const T* input, T* output, double sigma) {
+inline auto gaussian(const T* input, T* output, float sigma) {
     auto radius = static_cast<size_t>(2 * detail::s_pi * sigma + 1);
     auto extent = detail::repeat<dimensions>(radius);
     auto halo = extent / 2;
 
-    auto coeff = -.5 / sigma / sigma;
-    auto normal = 1.0;
+    auto coeff = -.5f / sigma / sigma;
+    auto normal = 1.0f;
     for (auto i = 0; i < dimensions; i++)
         normal *= sycl::sqrt(2 * detail::s_pi * sigma * sigma);
 
@@ -436,13 +436,13 @@ inline auto gaussian(const T* input, T* output, double sigma) {
 }
 
 template<int dimensions, typename T>
-inline auto bilateral(const T* input, T* output, double sigma_space, double sigma_color) {
+inline auto bilateral(const T* input, T* output, float sigma_space, float sigma_color) {
     auto radius = static_cast<size_t>(2 * detail::s_pi * sigma_space + 1);
     auto extent = detail::repeat<dimensions>(radius);
     auto halo = extent / 2;
 
-    auto space_coeff = -.5 / sigma_space / sigma_space;
-    auto color_coeff = -.5 / sigma_color / sigma_color;
+    auto space_coeff = -.5f / sigma_space / sigma_space;
+    auto color_coeff = -.5f / sigma_color / sigma_color;
 
     return [=](sycl::item<dimensions> item) {
         auto acc = sycl::float4{};
