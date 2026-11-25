@@ -528,7 +528,7 @@ inline auto convolve(const T* input, T* output, const sycl::range<dimensions>& f
 }
 
 template<int dimensions, typename T>
-inline auto erode(const T* input, T* output, const sycl::range<dimensions>& strel_extent, const bool* strel) {
+inline auto dilate(const T* input, T* output, const sycl::range<dimensions>& strel_extent, const bool* strel) {
     return wrapper::map(input, output, strel_extent,
         [=](sycl::float4& acc, const sycl::float4& px, const sycl::id<dimensions>& id) {
             auto enabled = strel[detail::get_linear_id(strel_extent, id)];
@@ -540,7 +540,7 @@ inline auto erode(const T* input, T* output, const sycl::range<dimensions>& stre
 }
 
 template<int dimensions, typename T>
-inline auto dilate(const T* input, T* output, const sycl::range<dimensions>& strel_extent, const bool* strel) {
+inline auto erode(const T* input, T* output, const sycl::range<dimensions>& strel_extent, const bool* strel) {
     return wrapper::map(input, output, strel_extent, sycl::float4{1.0f},
         [=](sycl::float4& acc, const sycl::float4& px, const sycl::id<dimensions>& id) {
             auto enabled = strel[detail::get_linear_id(strel_extent, id)];
